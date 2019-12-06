@@ -1,40 +1,43 @@
-import { RenderAdapter } from '../src/renderAdapter';
+import { RenderAdapter, RenderResponse } from '../src/renderAdapter';
 import { SkipRenderNotStringError } from '../src/SkipRenderNotStringError';
-import { CallHandler } from '@nestjs/common';
-import { map } from 'rxjs/operators';
-import { of } from 'rxjs';
-import * as ts from 'typescript';
-import { tsPassThroughHelper } from './passthroughHelper';
-import { RenderInterceptor } from '../src/renderInterceptor';
 import * as path from 'path';
 import { jestPassThroughTestHelper} from 'ts-passthrough-test-helper';
+import { RenderInterception } from '../src/interception';
+
+jest.mock('../src/interception');
 
 function noop() {
   //
 }
 
 describe('RenderAdapter', () => {
-  describe('should pass through all methods other than render from AbstractHttpAdapter', () => {
-    const adapterPath = path.join(__dirname, '..\\node_modules\\@nestjs\\core\\adapters\\http-adapter.d.ts');
-    const isValidMethod = (methodName => {
-      return methodName !== 'render';
-    });
-    jestPassThroughTestHelper({filePath: adapterPath, isValidMethod}, mock => new RenderAdapter(mock, undefined));
+  beforeEach(() => {
+    jest.clearAllMocks();
   });
-  describe('setBaseViewsDir', () => {
-    ['path', ['path1', 'path2']].forEach(p => {
-      it('should pass through if implemented on the adapter', () => {
-        const adapter = {setBaseViewsDir: jest.fn()};
-        const renderAdapter = new RenderAdapter(adapter as any, undefined);
-        renderAdapter.setBaseViewsDir(p);
-        expect(adapter.setBaseViewsDir).toHaveBeenCalledWith(p);
+  describe('pass through', () => {
+    describe('should pass through all methods other than render from AbstractHttpAdapter', () => {
+      const adapterPath = path.join(__dirname, '..\\node_modules\\@nestjs\\core\\adapters\\http-adapter.d.ts');
+      const isValidMethod = (methodName => {
+        return methodName !== 'render';
+      });
+      jestPassThroughTestHelper({filePath: adapterPath, isValidMethod}, mock => new RenderAdapter(mock, undefined));
+    });
+    describe('setBaseViewsDir', () => {
+      ['path', ['path1', 'path2']].forEach(p => {
+        it('should pass through if implemented on the adapter', () => {
+          const adapter = {setBaseViewsDir: jest.fn()};
+          const renderAdapter = new RenderAdapter(adapter as any, undefined);
+          renderAdapter.setBaseViewsDir(p);
+          expect(adapter.setBaseViewsDir).toHaveBeenCalledWith(p);
+        });
+      });
+      it('should not throw if not present on the adapter', () => {
+          const renderAdapter = new RenderAdapter({} as any, undefined);
+          expect(() => renderAdapter.setBaseViewsDir('somePath')).not.toThrow();
       });
     });
-    it('should not throw if not present on the adapter', () => {
-        const renderAdapter = new RenderAdapter({} as any, undefined);
-        expect(() => renderAdapter.setBaseViewsDir('somePath')).not.toThrow();
-    });
   });
+
   describe('render', () => {
     function getServerMethodResolved(timeout = 200) {
       let didResolve = false;
@@ -52,6 +55,10 @@ describe('RenderAdapter', () => {
         },
       };
     }
+    function getIntercept() {
+      const interception = (RenderInterception as jest.Mock).mock.instances[0];
+      return interception.intercept as jest.Mock;
+    }
     describe('skip render', () => {
       it('should throw error if result is not a string', () => {
         const renderAdapter = new RenderAdapter(null, null);
@@ -67,39 +74,41 @@ describe('RenderAdapter', () => {
         expect(setHeader).toBeCalledWith(response, 'Content-Type', 'text/html; charset=utf-8');
       });
 
-      describe('no render interception', () => {
-        it('should server reply if no render interceptors', async () => {
-          const serverReplyResolved = getServerMethodResolved();
-          const server = {reply: serverReplyResolved.method, setHeader: noop};
-          const renderAdapter = new RenderAdapter(server as any, () => 'rendered');
-          const response = {skipRender: true};
-          await renderAdapter.render(response, '', '<div></div>');
-          expect(serverReplyResolved.resolved()).toBe(true);
-          expect(server.reply).toHaveBeenCalledWith(response, '<div></div>');
-        });
-        it('should server reply if no renderToString', async () => {
-          const serverReplyResolved = getServerMethodResolved();
-          const server = {reply: serverReplyResolved.method, setHeader: noop};
-          const renderAdapter = new RenderAdapter(server as any);
-          const response = {skipRender: true, renderInterceptors: [{}]};
-          await renderAdapter.render(response, '', '<div></div>');
-          expect(serverReplyResolved.resolved()).toBe(true);
-          expect(server.reply).toHaveBeenCalledWith(response, '<div></div>');
-        });
+      it('should not template intercept', async () => {
+        const renderAdapter = new RenderAdapter({reply: noop, setHeader: noop} as any, null);
+        const response = {skipRender: true};
+        await renderAdapter.render(response, '', '');
+
+        expect(getIntercept()).not.toHaveBeenCalled();
+      });
+
+      it('should server reply if no render interceptors', async () => {
+        const serverReplyResolved = getServerMethodResolved();
+        const server = {reply: serverReplyResolved.method, setHeader: noop};
+        const renderAdapter = new RenderAdapter(server as any, () => 'rendered');
+        const response = {skipRender: true};
+        await renderAdapter.render(response, '', '<div></div>');
+        expect(serverReplyResolved.resolved()).toBe(true);
+        expect(server.reply).toHaveBeenCalledWith(response, '<div></div>');
       });
 
       describe('render interception', () => {
         it('should server reply with the render intercepted', async () => {
           const serverReplyResolved = getServerMethodResolved();
           const server = {reply: serverReplyResolved.method, setHeader: noop};
-          const renderAdapter = new RenderAdapter(server as any, () => '');
-          const response = {skipRender: true, renderInterceptors: [{}]};
+          const renderAdapter = new RenderAdapter(server as any);
+
           const renderIntercepted = '<div>Render intercepted</div>';
-          const renderIntercept = jest.fn().mockReturnValue(Promise.resolve(renderIntercepted));
-          renderAdapter.renderIntercept = renderIntercept;
+          const intercept = getIntercept().mockReturnValue(Promise.resolve(renderIntercepted));
+
+          const response = {skipRender: true};
+          const renderInterceptor = {intercept: noop} as any;
+          renderAdapter.registerRenderInterception(renderInterceptor, response);
+
           const skipRenderIntercepted = '<div></div>';
           await renderAdapter.render(response, '', skipRenderIntercepted);
-          expect(renderIntercept).toHaveBeenCalledWith(skipRenderIntercepted, response.renderInterceptors);
+
+          expect(intercept).toHaveBeenCalledWith(skipRenderIntercepted, [renderInterceptor]);
           expect(serverReplyResolved.resolved()).toBe(true);
           expect(server.reply).toHaveBeenCalledWith(response, renderIntercepted);
         });
@@ -107,125 +116,126 @@ describe('RenderAdapter', () => {
     });
 
     describe('not skip render', () => {
+      it('it should intercept the view with registered template interceptors', async () => {
+        const serverRenderResolved = getServerMethodResolved();
+        const server = {render: serverRenderResolved.method};
+        const renderAdapter = new RenderAdapter(server as any);
+
+        const response = {};
+        const templateInterceptor = { intercept: noop};
+        renderAdapter.registerTemplateInterception(templateInterceptor as any, response);
+
+        const intercept = getIntercept();
+
+        await renderAdapter.render(response, 'someView', {});
+        expect(intercept).toHaveBeenCalledWith('someView', [templateInterceptor]);
+      });
+
       describe('no render interception', () => {
-        describe('no renderToString', () => {
-          it('should server render the view', async () => {
-            const serverRenderResolved = getServerMethodResolved();
-            const server = {render: serverRenderResolved.method};
-            const renderAdapter = new RenderAdapter(server as any);
-            const response = {renderInterceptors: [{}]};
-            const result = {the: 'result'};
-            await renderAdapter.render(response, 'someView', result);
-            expect(serverRenderResolved.resolved()).toBe(true);
-            expect(server.render).toHaveBeenCalledWith(response, 'someView', result);
-          });
-        });
-        describe('no render interceptors', () => {
-          it('should server render the view', async () => {
-            const serverRenderResolved = getServerMethodResolved();
-            const server = {render: serverRenderResolved.method};
-            const renderAdapter = new RenderAdapter(server as any, () => '');
-            const response = {no: 'renderInterceptors'};
-            const result = {the: 'result'};
-            await renderAdapter.render(response, 'someView', result);
-            expect(serverRenderResolved.resolved()).toBe(true);
-            expect(server.render).toHaveBeenCalledWith(response, 'someView', result);
+        [true, false].forEach(noRenderToString => {
+          describe(noRenderToString ? 'no render to string' : ' no render interceptors', () => {
+            it('should server render the intercepted view', async () => {
+              const serverRenderResolved = getServerMethodResolved();
+              const server = {render: serverRenderResolved.method};
+              const renderAdapter = new RenderAdapter(server as any, noRenderToString ? undefined : () => '');
+
+              const response = {the: 'response'};
+              if (noRenderToString) {
+                renderAdapter.registerRenderInterception({} as any, response);
+              }
+
+              const interceptedView = 'intercepted/someView';
+              getIntercept().mockReturnValue(Promise.resolve(interceptedView));
+
+              const result = {the: 'result'};
+              await renderAdapter.render(response, 'someView', result);
+
+              expect(serverRenderResolved.resolved()).toBe(true);
+              expect(server.render).toHaveBeenCalledWith(response, interceptedView, result);
+            });
           });
         });
       });
+
       describe('render interception', () => {
         it('should reply with the render intercepted renderToString', async () => {
           const serverReplyResolved = getServerMethodResolved();
+          const server = {reply: serverReplyResolved.method} as any;
+
           const renderedToString = '<div></div>';
           const renderToString = jest.fn().mockReturnValue(Promise.resolve(renderedToString));
-          const server = {reply: serverReplyResolved.method} as any;
-          const renderAdapter = new RenderAdapter(server, renderToString);
-          const response = { renderInterceptors: [{}]};
 
+          const renderAdapter = new RenderAdapter(server, renderToString);
+          const interceptedView = 'intercepted/someView';
+          const intercept = getIntercept();
+          intercept.mockReturnValueOnce(Promise.resolve(interceptedView));
           const renderIntercepted = '<div>Render intercepted</div>';
-          const renderIntercept = jest.fn().mockReturnValue(Promise.resolve(renderIntercepted));
-          renderAdapter.renderIntercept = renderIntercept;
+          intercept.mockReturnValueOnce(Promise.resolve(renderIntercepted));
+
+          const response = { };
+
+          const renderInterceptor = {intercept: noop} as any;
+          renderAdapter.registerRenderInterception(renderInterceptor, response);
 
           const result = { some: 'result'};
           await renderAdapter.render(response, 'someView', result);
 
-          expect(renderToString).toHaveBeenCalledWith(server, 'someView', result, response);
+          expect(renderToString).toHaveBeenCalledWith(server, interceptedView, result, response);
 
-          expect(renderIntercept).toHaveBeenCalledWith(renderedToString, response.renderInterceptors);
+          expect(intercept).toHaveBeenNthCalledWith(2, renderedToString, [renderInterceptor]);
           expect(serverReplyResolved.resolved()).toBe(true);
           expect(server.reply).toHaveBeenCalledWith(response, renderIntercepted);
         });
       });
     });
 
-    describe('renderIntercept', () => {
-      describe('should return Promise for the last observed render intercepted value', () => {
-        const rendered = '<div>Rendered</div>';
-        interface RenderInterceptTest {
-          renderInterceptors: RenderInterceptor[];
-          expectedResult: any;
-          description: string;
-        }
-        const tests: RenderInterceptTest[] = [
-          {
-            description: 'should provide the rendered string to the chain of render interceptors',
-            renderInterceptors: [
-              {
-                renderIntercept(callHandler: CallHandler<string>) {
-                  return callHandler.handle();
-                },
-              } as any,
-            ],
-            expectedResult: rendered,
-          },
-          {
-            description: 'renderIntercept returning Observable with multiple values',
-            renderInterceptors: [
-              {
-                renderIntercept(callHandler: CallHandler<string>) {
-                  return of('1', '2', '3');
-                },
-              } as any,
-            ],
-            expectedResult: '3',
-          },
-          {
-            description: 'renderIntercept returning Promise<Observable> with multiple values',
-            renderInterceptors: [
-              {
-                renderIntercept(callHandler: CallHandler<string>) {
-                  return Promise.resolve(of('1', '2', '3'));
-                },
-              } as any,
-            ],
-            expectedResult: '3',
-          },
-          {
-            description: 'multiple render interceptors',
-            renderInterceptors: [
-              {
-                renderIntercept(callHandler: CallHandler<string>) {
-                  return callHandler.handle().pipe(map(v => v + '2'));
-                },
-              } as any,
-              {
-                renderIntercept(callHandler: CallHandler<string>) {
-                  return callHandler.handle().pipe(map(v => v + '1'));
-                },
-              } as any,
-            ],
-            expectedResult: rendered + '1' + '2',
-          },
-        ];
-        tests.forEach(t => {
-          it(t.description, async () => {
-            const renderAdapter = new RenderAdapter(null, null);
-            const result = await renderAdapter.renderIntercept(rendered, t.renderInterceptors);
-            expect(result).toEqual(t.expectedResult);
-          });
+  });
+
+  describe('registration', () => {
+    interface RegistrationTest {
+      description: string;
+      templateInterceptors: boolean;
+      interceptors: any[];
+    }
+    const registrationTests: RegistrationTest[] = [
+      {
+        description: 'single render interceptor',
+        interceptors: [{intercept: noop}],
+        templateInterceptors: false,
+      },
+      {
+        description: 'multiple render interceptor',
+        interceptors: [{intercept: noop}, {intercept2: noop}],
+        templateInterceptors: false,
+      },
+      {
+        description: 'single template interceptor',
+        interceptors: [{intercept: noop}],
+        templateInterceptors: true,
+      },
+      {
+        description: 'multiple template interceptor',
+        interceptors: [{intercept: noop}, {intercept2: noop}],
+        templateInterceptors: true,
+      },
+    ];
+    registrationTests.forEach(test => {
+      it(test.description, () => {
+        const response: RenderResponse = {};
+        const renderAdapter = new RenderAdapter(null);
+        test.interceptors.forEach(interceptor => {
+          if (test.templateInterceptors) {
+            renderAdapter.registerTemplateInterception(interceptor, response);
+          } else {
+            renderAdapter.registerRenderInterception(interceptor, response);
+          }
         });
+        if (test.templateInterceptors) {
+          expect(response.templateInterceptors).toEqual(test.interceptors);
+        } else {
+          expect(response.renderInterceptors).toEqual(test.interceptors);
+        }
       });
     });
-
   });
 });

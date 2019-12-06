@@ -1,9 +1,10 @@
-import { Controller, UseInterceptors, Get, Render } from '@nestjs/common';
+import { Controller, UseInterceptors, Get, Render, Logger, LoggerService } from '@nestjs/common';
 import { SkipRenderInterceptor } from '../interceptors/skipRenderInterceptor';
-import { AddFooterRenderInterceptor } from '../interceptors/addFooterRenderInterceptor';
+import { useFooterRenderInterceptor } from '../interceptors/addFooterRenderInterceptor';
+import { ExampleTemplateInterceptor } from '../interceptors/exampleTemplateInterceptor';
 
 @Controller('renderInterception')
-@UseInterceptors( SkipRenderInterceptor, new AddFooterRenderInterceptor('<div>This is a footer</div>'))
+@UseInterceptors( SkipRenderInterceptor,  useFooterRenderInterceptor('<div>This is a footer</div>'))
 export class RenderInterceptionController {
   @Get('skipRender1')
   @Render('someView1.hbs')
@@ -37,5 +38,20 @@ export class RenderInterceptionController {
     };
   }
 
-  // could demo that if no render template all is good
+  @UseInterceptors(ExampleTemplateInterceptor)
+  @Get('templateIntercept')
+  @Render('someView1.hbs')
+  templateIntercept() {
+    return {
+      view: 'One - will be fancy viewed',
+    };
+  }
+
+  @UseInterceptors(useFooterRenderInterceptor('<div>This is another footer</div>'))
+  @Render('someView1.hbs')
+  doubleFooter() {
+    return {
+      view: 'Double footer',
+    };
+  }
 }

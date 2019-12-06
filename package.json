@@ -1,6 +1,6 @@
 {
   "name": "nest-render-interception",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "description": "An adapter and interceptor classes for overriding the template rendering process of nestjs",
   "author": "Tony Hallett",
   "license": "MIT",

@@ -9,7 +9,7 @@ import * as path from 'path';
 describe('Render interception', () => {
   let app: NestExpressApplication;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       controllers: [ RenderInterceptionController],
     }).compile();
@@ -24,13 +24,15 @@ describe('Render interception', () => {
           }
         });
       });
-    }));
+    }), {logger: false});
     const viewsDirectory = path.join(__dirname, 'views');
     app.setBaseViewsDir(viewsDirectory);
     app.setViewEngine('hbs');
     await app.init();
   });
-
+  afterAll(async () => {
+    await app.close();
+  });
   describe('skip render', () => {
     interface SkipRenderTest {
       view1: boolean;
@@ -95,10 +97,35 @@ describe('Render interception', () => {
         .expect(200)
         .expect(res => {
           const text = res.text;
-          expect(text.indexOf(`This view will ${rit.expectRenderIntercepted ? '' : 'not '}be render intercepted`));
+          expect(text.indexOf(`This view will ${rit.expectRenderIntercepted ? '' : 'not '}be render intercepted`) !== -1).toBe(true);
           expect(text.indexOf('<div>This is a footer</div>') !== -1).toBe(rit.expectRenderIntercepted);
         });
       });
+    });
+  });
+
+  describe('template interception', () => {
+    it('should work', () => {
+      request(app.getHttpServer())
+        .get(`/renderInterception/templateIntercept`)
+        .expect(200)
+        .expect(res => {
+          const text = res.text;
+          expect(text.indexOf('This is fancy') !== -1).toBe(true);
+          expect(text.indexOf('One this will be fancy viewed') !== -1).toBe(true);
+        });
+    });
+  });
+  describe('double factory injection', () => {
+    it('should work', () => {
+      request(app.getHttpServer())
+        .get(`/renderInterception/doubleFooter`)
+        .expect(200)
+        .expect(res => {
+          const text = res.text;
+          expect(text.indexOf('<div>This is a footer</div>') !== -1).toBe(true);
+          expect(text.indexOf('<div>This is another footer</div>') !== -1).toBe(true);
+        });
     });
   });
 });

@@ -1,19 +1,37 @@
-import { RequestMethod, NestApplicationOptions, CallHandler, HttpServer } from '@nestjs/common';
-
+import {
+  RequestMethod,
+  NestApplicationOptions,
+  CallHandler,
+  HttpServer,
+} from '@nestjs/common';
 import { CorsOptions } from '@nestjs/common/interfaces/external/cors-options.interface';
-
-import { defer, from as fromPromise, of } from 'rxjs';
-
-import { mergeAll } from 'rxjs/operators';
 import { SkipRenderNotStringError } from './SkipRenderNotStringError';
 import { AbstractHttpAdapter } from '@nestjs/core';
-import { RenderInterceptor } from './renderInterceptor';
+import { RenderInterceptorBase } from './renderInterceptorBase';
+import { IRenderRegistration } from './renderRegistrationInterface';
+import { RenderInterception } from './interception';
 
-export class RenderAdapter<T extends AbstractHttpAdapter = AbstractHttpAdapter> extends AbstractHttpAdapter {
+export type RenderResponse = {
+  templateInterceptors?: RenderInterceptorBase[];
+  renderInterceptors?: RenderInterceptorBase[];
+  skipRender?: boolean;
+} & Record<string, any>;
+export type ResponseInterceptorsKeys = keyof Omit<RenderResponse, 'skipRender'>;
+
+export class RenderAdapter<T extends AbstractHttpAdapter = AbstractHttpAdapter>
+  extends AbstractHttpAdapter
+  implements IRenderRegistration {
+  private interception = new RenderInterception();
   constructor(
     public readonly adapter: T,
-    private readonly renderToString?: (server: T, view: string, options: any, response: any) => string | Promise<string>) {
-      /*
+    private readonly renderToString?: (
+      server: T,
+      view: string,
+      options: any,
+      response: any,
+    ) => string | Promise<string>,
+  ) {
+    /*
         ctor arg sets protected instance property
         that is then used by use/get/post/head/delete/put/patch/options/listen/getInstance
 
@@ -21,8 +39,8 @@ export class RenderAdapter<T extends AbstractHttpAdapter = AbstractHttpAdapter> 
 
         the adapter can  be retrieved with the adapter property or getInstance can be used
       */
-      super(undefined);
-    }
+    super(undefined);
+  }
 
   //#region pass throughs
   createMiddlewareFactory(method: RequestMethod) {
@@ -123,48 +141,70 @@ export class RenderAdapter<T extends AbstractHttpAdapter = AbstractHttpAdapter> 
   //#endregion
 
   private setContentTypeToHtml(response: any) {
-    this.adapter.setHeader(response, 'Content-Type', 'text/html; charset=utf-8');
+    this.adapter.setHeader(
+      response,
+      'Content-Type',
+      'text/html; charset=utf-8',
+    );
   }
   private isString = (fn: any): fn is string => typeof fn === 'string';
-  private canRenderIntercept(response: any) {
-    return this.renderToString && response.renderInterceptors && response.renderInterceptors.length > 0;
+  private canRenderIntercept(response: RenderResponse, skipRender: boolean) {
+    let canRenderIntercept = false;
+    if (response.renderInterceptors && response.renderInterceptors.length > 0) {
+      canRenderIntercept = skipRender || !!this.renderToString;
+    }
+    return canRenderIntercept;
   }
-  async render(response: any, view: string, options: any) {
+  registerTemplateInterception(
+    interceptor: RenderInterceptorBase,
+    response: any,
+  ) {
+    this.registerInterception('templateInterceptors', interceptor, response);
+  }
+  registerRenderInterception(
+    interceptor: RenderInterceptorBase,
+    response: any,
+  ) {
+    this.registerInterception('renderInterceptors', interceptor, response);
+  }
+  private registerInterception<TKey extends ResponseInterceptorsKeys>(
+    key: TKey,
+    interceptor: RenderInterceptorBase,
+    response: RenderResponse,
+  ) {
+    if (response[key] === undefined) {
+      response[key] = [];
+    }
+    response[key].push(interceptor);
+  }
+
+  async render(response: RenderResponse, view: string, options: any) {
     const skipRender = response.skipRender;
     if (skipRender) {
       if (!this.isString(options)) {
         throw new SkipRenderNotStringError();
       }
       this.setContentTypeToHtml(response);
+    } else {
+      view = await this.interception.intercept(
+        view,
+        response.templateInterceptors,
+      );
     }
-    if (this.canRenderIntercept(response)) {
+    if (this.canRenderIntercept(response, skipRender)) {
       const renderedString = skipRender
-            ? options as string
-            : await this.renderToString(this.adapter, view, options, response);
+        ? (options as string)
+        : await this.renderToString(this.adapter, view, options, response);
 
-      const renderIntercepted = await this.renderIntercept(renderedString, response.renderInterceptors);
+      const renderIntercepted = await this.interception.intercept(
+        renderedString,
+        response.renderInterceptors,
+      );
       return this.adapter.reply(response, renderIntercepted);
     } else if (response.skipRender) {
-        return this.adapter.reply(response, options);
-      } else {
-        return this.adapter.render(response, view, options);
-      }
-  }
-  public async renderIntercept(renderedString: string, renderInterceptors: RenderInterceptor[]) {
-    const renderInterceptedObservable = await this.renderInterceptInterceptors(renderedString, renderInterceptors);
-    return renderInterceptedObservable.toPromise();
-  }
-  private renderInterceptInterceptors(rendered: string, interceptors: RenderInterceptor[]) {
-    const start$ = defer(() => of(rendered));
-    const nextFn = (i = 0) => async () => {
-      if (i >= interceptors.length) {
-        return start$;
-      }
-      const handler: CallHandler = {
-        handle: () => fromPromise(nextFn(i + 1)()).pipe(mergeAll()),
-      };
-      return interceptors[i].renderIntercept(handler);
-    };
-    return nextFn()();
+      return this.adapter.reply(response, options);
+    } else {
+      return this.adapter.render(response, view, options);
+    }
   }
 }

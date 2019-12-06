@@ -10,7 +10,7 @@ export interface IRenderInterceptorExecutionContext {
 }
 
 class RenderInterceptorExecutionContext
-implements IRenderInterceptorExecutionContext {
+  implements IRenderInterceptorExecutionContext {
   private readonly httpArgumentsHost: HttpArgumentsHost;
   constructor(private readonly executionContext: ExecutionContext) {
     this.httpArgumentsHost = executionContext.switchToHttp();
@@ -28,6 +28,11 @@ implements IRenderInterceptorExecutionContext {
     return this.httpArgumentsHost.getResponse<T>();
   }
 }
-export type IRenderInterceptorExecutionContextFactory = (executionContext: ExecutionContext) => IRenderInterceptorExecutionContext;
-export const RenderInterceptorExecutionContextFactory: IRenderInterceptorExecutionContextFactory
-  = executionContext => new RenderInterceptorExecutionContext(executionContext);
+export type IRenderInterceptorExecutionContextFactory = (
+  executionContext: ExecutionContext,
+) => IRenderInterceptorExecutionContext;
+export const RenderInterceptorExecutionContextFactory: IRenderInterceptorExecutionContextFactory =
+  // tslint:disable-next-line: only-arrow-functions
+  function(executionContext) {
+    return new RenderInterceptorExecutionContext(executionContext);
+  };
